@@ -207,7 +207,7 @@ def motionActiveHandler(evt, lightSwitch=null) {
 }
 
 def secondsOfInactivity(deviceId) {
-    return 60*(minutesOfInactivity[deviceId] ?: 5)
+    return 60*(state.minutesOfInactivity[deviceId] ?: 5)
 }
 
 def turnOffBedroom() { sendOffCommand(bedroomSwitch) }
