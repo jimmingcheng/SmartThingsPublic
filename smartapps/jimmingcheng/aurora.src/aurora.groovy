@@ -3,12 +3,14 @@
  *
  *  Copyright 2016 Jimming Cheng
  *
- *  Version 1.1.0
+ *  Version 1.2.1
  *
  *	Version History
  *
- *	1.0.0	2016-02-09		Initial version
+ *  1.2.1   2016-02-12      Fixed bugs
+ *  1.2.0   2016-02-12      Remove auto-off functionality
  *  1.1.0   2016-02-12      Traversal function and smarter auto-off
+ *	1.0.0	2016-02-09		Initial version
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -74,34 +76,6 @@ def updated() {
 
 def initialize() {
     state.lastActive = [:]
-    state.lastSentOnCommand = [:]
-    state.lastSentOffCommand = [:]
-    state.lastTurnedOn = [:]
-
-    state.minutesUntilAutoOff = [
-        (downstairsSwitch.id): 2,
-        (entryWaySwitch.id): 5,
-        (frontDoorSwitch.id): 5,
-        (frontWalkSwitch.id): 5,
-        (kitchenSwitch.id): 5,
-        (masterBathSpotLightsSwitch.id): 5,
-        (masterClosetSwitch.id): 5,
-        (officeSwitch.id): 5,
-        (upstairsSwitch.id): 2
-    ]
-    state.lightSwitchToTurnOffFunc = [
-        (bedroomSwitch.id): turnOffBedroom,
-        (downstairsSwitch.id): turnOffDownstairs,
-        (entryWaySwitch.id): turnOffEntryWay,
-        (frontDoorSwitch.id): turnOffFrontDoor,
-        (frontWalkSwitch.id): turnOffFrontWalk,
-        (kitchenSwitch.id): turnOffKitchen,
-        (masterBathMirrorSwitch.id): turnOffMasterBathMirror,
-        (masterBathSpotLightsSwitch.id): turnOffMasterBathSpotLights,
-        (masterClosetSwitch.id): turnOffMasterCloset,
-        (officeSwitch.id): turnOffOffice,
-        (upstairsSwitch.id): turnOffUpstairs
-    ]
 
     subscribe(frontDoorContact, "contact.open", frontDoorHandler)
 
@@ -114,18 +88,6 @@ def initialize() {
     subscribe(masterBathMotion, "motion.active", masterBathHandler)
     subscribe(officeMotion, "motion.active", officeHandler)
     subscribe(upstairsMotion, "motion.active", upstairsHandler)
-
-    subscribe(bedroomSwitch, "switch", switchHandler)
-    subscribe(downstairsSwitch, "switch", switchHandler)
-    subscribe(entryWaySwitch, "switch", switchHandler)
-    subscribe(frontDoorSwitch, "switch", switchHandler)
-    subscribe(frontWalkSwitch, "switch", switchHandler)
-    subscribe(kitchenSwitch, "switch", switchHandler)
-    subscribe(masterBathMirrorSwitch, "switch", switchHandler)
-    subscribe(masterBathSpotLightsSwitch, "switch", switchHandler)
-    subscribe(masterClosetSwitch, "switch", switchHandler)
-    subscribe(officeSwitch, "switch", switchHandler)
-    subscribe(upstairsSwitch, "switch", switchHandler)
 
     subscribe(location, "sunriseTime", sunriseTimeHandler)
     subscribe(location, "sunsetTime", sunsetTimeHandler)
@@ -150,8 +112,8 @@ def bedroomHallHandler(evt) {
     motionActiveHandler(evt.device)
     if (isDark()) {
         if (location.mode == "Sleeping") {
-            //sendOnCommand(bedroomHallSwitch, 50)
-            sendOnCommand(masterClosetSwitch, 20)
+            //sendOnCommand(bedroomHallSwitch, 20)
+            //sendOnCommand(masterClosetSwitch, 20)
             if (
                 traversedMotion([entryWayEastMotion, bedroomHallMotion]) &&
                 !traversedMotion([entryWayEastMotion, masterBathMotion])
@@ -170,7 +132,7 @@ def bedroomHallHandler(evt) {
         }
         else {
             //sendOnCommand(bedroomHallSwitch, 100)
-            sendOnCommand(masterClosetSwitch, 100)
+            //sendOnCommand(masterClosetSwitch, 100)
             if (
                 traversedMotion([entryWayEastMotion, bedroomHallMotion]) ||
                 traversedMotion([masterBathMotion, bedroomHallMotion])
@@ -235,28 +197,6 @@ def motionActiveHandler(motionSensor, lightSwitch=null) {
     }
 }
 
-def secondsUntilAutoOff(deviceId) {
-    def mins = state.minutesUntilAutoOff[deviceId]
-    if (mins) {
-        return 60*mins
-    }
-    else {
-        return mins
-    }
-}
-
-def turnOffBedroom() { finishSendOffCommand(bedroomSwitch) }
-def turnOffDownstairs() { finishSendOffCommand(downstairsSwitch) }
-def turnOffEntryWay() { finishSendOffCommand(entryWaySwitch) }
-def turnOffFrontDoor() { finishSendOffCommand(frontDoorSwitch) }
-def turnOffFrontWalk() { finishSendOffCommand(frontWalkSwitch) }
-def turnOffKitchen() { finishSendOffCommand(kitchenSwitch) }
-def turnOffMasterBathMirror() { finishSendOffCommand(masterBathMirrorSwitch) }
-def turnOffMasterBathSpotLights() { finishSendOffCommand(masterBathSpotLightsSwitch) }
-def turnOffMasterCloset() { finishSendOffCommand(masterClosetSwitch) }
-def turnOffOffice() { finishSendOffCommand(officeSwitch) }
-def turnOffUpstairs() { finishSendOffCommand(upstairsSwitch) }
-
 def wasActive(motionSensor) {
     return traversedMotion([motionSensor])
 }
@@ -280,46 +220,16 @@ def traversedMotion(motionSensors) {
 }
 
 def sendOnCommand(lightSwitch, level=null) {
-    state.lastSentOnCommand[lightSwitch.id] = now()
     if (level == null) {
         lightSwitch.on()
     }
     else {
         lightSwitch.setLevel(level)
     }
-    def secs = secondsUntilAutoOff(lightSwitch.id)
-    if (secs) {
-        sendOffCommand(lightSwitch, secs)
-    }
 }
 
-def sendOffCommand(lightSwitch, delay=0) {
-    state.lastSentOffCommand[lightSwitch.id] = now()
-    def func = state.lightSwitchToTurnOffFunc[lightSwitch.id]
-    if (delay && func) {
-        runIn(delay, func)
-    }
-    else {
-        finishSendOffCommand(lightSwitch)
-    }
-}
-
-def finishSendOffCommand(lightSwitch) {
-    def lastTurnedOn = state.lastTurnedOn[lightSwitch.id] ?: 0
-    def lastSentOnCommand = state.lastSentOnCommand[lightSwitch.id] ?: 0
-    def lastSentOffCommand = state.lastSentOffCommand[lightSwitch.id] ?: 0
-
-    if (lastTurnedOn > lastSentOffCommand || lastSentOnCommand > lastSentOnCommand) {
-        return
-    }
-
+def sendOffCommand(lightSwitch) {
     lightSwitch.off()
-}
-
-def switchHandler(evt) {
-    if (evt.value == "on") {
-        state.lastTurnedOn[evt.deviceId] = now()
-    }
 }
 
 def sunriseTimeHandler(evt) {
