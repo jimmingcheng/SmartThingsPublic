@@ -3,14 +3,15 @@
  *
  *  Copyright 2016 Jimming Cheng
  *
- *  Version 1.2.1
+ *  Version 1.3.0
  *
  *	Version History
  *
+ *  1.3.0   2016-02-15      Added illuminance sensor for dark vs day mode 
  *  1.2.1   2016-02-12      Fixed bugs
  *  1.2.0   2016-02-12      Remove auto-off functionality
  *  1.1.0   2016-02-12      Traversal function and smarter auto-off
- *	1.0.0	2016-02-09		Initial version
+ *	1.0.0   2016-02-09      Initial version
  *
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  *  in compliance with the License. You may obtain a copy of the License at:
@@ -38,6 +39,10 @@ preferences {
         section("Contact Sensors") {
             input "frontDoorContact", "capability.contactSensor", title: "Front Door"
         }
+        section("Lux Sensors") {
+            input "luxSensor", "capability.illuminanceMeasurement", title: "Lux Sensor"
+            input "luxThreshold", "number", title: "Lux Threshold"
+        }
         section("Motion Sensors") {
             input "bedroomHallMotion", "capability.motionSensor", title: "Bedroom Hall"
             input "downstairsMotion", "capability.motionSensor", title: "Downstairs"
@@ -56,6 +61,7 @@ preferences {
             input "frontDoorSwitch", "capability.switch", title: "Front Door"
             input "frontWalkSwitch", "capability.switch", title: "Front Walk"
             input "kitchenSwitch", "capability.switch", title: "Kitchen"
+            input "livingRoomSwitch", "capability.switch", title: "Living Room"
             input "masterBathMirrorSwitch", "capability.switch", title: "Master Bath Mirror"
             input "masterBathSpotLightsSwitch", "capability.switch", title: "Master Bath Spot Lights"
             input "masterClosetSwitch", "capability.switch", title: "Master Closet"
@@ -76,6 +82,7 @@ def updated() {
 
 def initialize() {
     state.lastActive = [:]
+    state.sleepingDimLevel = 15
 
     subscribe(frontDoorContact, "contact.open", frontDoorHandler)
 
@@ -89,13 +96,16 @@ def initialize() {
     subscribe(officeMotion, "motion.active", officeHandler)
     subscribe(upstairsMotion, "motion.active", upstairsHandler)
 
-    subscribe(location, "sunriseTime", sunriseTimeHandler)
+    subscribe(location, "sunriseTime", darknessHandler)
     subscribe(location, "sunsetTime", sunsetTimeHandler)
+    subscribe(luxSensor, "illuminance", darknessHandler)
 
-    initIsDark()
+    state.isDark = null
+    updateDarkness()
 }
 
 def frontDoorHandler(evt) {
+    updateDarkness()
     motionActiveHandler(evt.device)
     if (isDark()) {
         if (wasActive(entryWayEastMotion) || wasActive(entryWayWestMotion)) {
@@ -114,29 +124,18 @@ def bedroomHallHandler(evt) {
         if (location.mode == "Sleeping") {
             //sendOnCommand(bedroomHallSwitch, 20)
             //sendOnCommand(masterClosetSwitch, 20)
-            if (
-                traversedMotion([entryWayEastMotion, bedroomHallMotion]) &&
-                !traversedMotion([entryWayEastMotion, masterBathMotion])
-            ) {
+            if (wasActive(entryWayEastMotion) || wasActive(masterBathMotion)) {
                 sendOffCommand(entryWaySwitch)
-            }
-            else if (
-                traversedMotion([masterBathMotion, bedroomHallMotion]) &&
-                !traversedMotion([masterBathMotion, entryWayEastMotion])
-            ) {
                 sendOffCommand(masterBathMirrorSwitch)
             }
-            else if (!wasActive(entryWayEastMotion) && !wasActive(masterBathMotion)) {
-                sendOnCommand(masterBathMirrorSwitch, 20)
+            if (!wasActive(entryWayEastMotion) && !wasActive(masterBathMotion)) {
+                sendOnCommand(masterBathMirrorSwitch, state.sleepingDimLevel)
             }
         }
         else {
             //sendOnCommand(bedroomHallSwitch, 100)
             //sendOnCommand(masterClosetSwitch, 100)
-            if (
-                traversedMotion([entryWayEastMotion, bedroomHallMotion]) ||
-                traversedMotion([masterBathMotion, bedroomHallMotion])
-            ) {
+            if (wasActive(entryWayEastMotion) || wasActive(masterBathMotion)) {
                 sendOnCommand(bedroomSwitch)
             }
         }
@@ -153,6 +152,20 @@ def entryWayEastHandler(evt) {
 
 def entryWayWestHandler(evt) {
     motionActiveHandler(evt.device, entryWaySwitch)
+    if (location.mode == "Sleeping") {
+        if (wasActive(downstairsMotion)) {
+            sendOffCommand(downstairsSwitch)
+        }
+        if (wasActive(kitchenMotion)) {
+            sendOffCommand(kitchenSwitch)
+        }
+        if (wasActive(livingRoomMotion)) {
+            sendOffCommand(livingRoomSwitch)
+        }
+        if (wasActive(upstairsMotion)) {
+            sendOffCommand(upstairsSwitch)
+        }
+    }
 }
 
 def kitchenHandler(evt) {
@@ -160,16 +173,21 @@ def kitchenHandler(evt) {
 }
 
 def livingRoomHandler(evt) {
-    motionActiveHandler(evt.device, livingRoomSwitch)
-    if (isDark() && traversedMotion([upstairsMotion, livingRoomMotion])) {
-        sendOffCommand(upstairsSwitch)
+    motionActiveHandler(evt.device)
+    if (isDark()) {
+        if (location.mode == "Sleeping") {
+            sendOnCommand(livingRoomSwitch)
+        }
+        if (wasActive(upstairsMotion)) {
+            sendOffCommand(upstairsSwitch)
+        }
     }
 }
 
 def masterBathHandler(evt) {
     motionActiveHandler(evt.device)
     if (location.mode == "Sleeping") {
-        sendOnCommand(masterBathMirrorSwitch, 50)
+        sendOnCommand(masterBathMirrorSwitch, state.sleepingDimLevel)
     }
     else {
         sendOnCommand(masterBathMirrorSwitch, 100)
@@ -178,14 +196,14 @@ def masterBathHandler(evt) {
 
 def officeHandler(evt) {
     motionActiveHandler(evt.device, officeSwitch)
-    if (isDark() && traversedMotion([officeMotion, upstairsMotion])) {
+    if (isDark() && wasActive(upstairsMotion)) {
         sendOffCommand(upstairsSwitch)
     }
 }
 
 def upstairsHandler(evt) {
     motionActiveHandler(evt.device, upstairsSwitch)
-    if (isDark() && traversedMotion([upstairsMotion, officeMotion])) {
+    if (isDark() && wasActive(officeMotion)) {
         sendOffCommand(officeSwitch)
     }
 }
@@ -221,7 +239,9 @@ def traversedMotion(motionSensors) {
 
 def sendOnCommand(lightSwitch, level=null) {
     if (level == null) {
-        lightSwitch.on()
+        if (lightSwitch.currentSwitch != "on") {
+            lightSwitch.on()
+        }
     }
     else {
         lightSwitch.setLevel(level)
@@ -229,31 +249,36 @@ def sendOnCommand(lightSwitch, level=null) {
 }
 
 def sendOffCommand(lightSwitch) {
-    lightSwitch.off()
-}
-
-def sunriseTimeHandler(evt) {
-    becameBright()
+    if (lightSwitch.currentSwitch != "off") {
+        lightSwitch.off()
+    }
 }
 
 def sunsetTimeHandler(evt) {
     becameDark()
 }
 
+def darknessHandler(evt) {
+    updateDarkness()
+}
+
 def isDark() {
     return state.isDark
 }
 
-def initIsDark() {
-    state.isDark = null
-
+def updateDarkness() {
     def ss = getSunriseAndSunset()
     def t = now()
-    if (t < ss.sunriseTime || t > state.sunsetTime) {
+    if (t < ss.sunrise.time || t > ss.sunset.time) {
         becameDark()
     }
     else {
-        becameBright()
+        if (officeSwitch.currentSwitch == "on" || luxSensor.currentIlluminance < luxThreshold) {
+            becameDark()
+        }
+        else {
+            becameBright()
+        }
     }
 }
 
