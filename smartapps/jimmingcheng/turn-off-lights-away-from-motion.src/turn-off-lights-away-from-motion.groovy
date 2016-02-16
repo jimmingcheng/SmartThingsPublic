@@ -74,6 +74,7 @@ def offHandler(evt) {
     for (zone in state.zones) {
         for (motionSensor in settings["motionSensors_${zone}"]) {
             if (motionSensor.id == state.lastActiveMotionSensorId) {
+                sendNotificationEvent("Turning off switches away from ${motionSensor}")
                 for (lightSwitch in settings["awaySwitches_${zone}"]) {
                     if (lightSwitch.currentSwitch == "on") {
                         lightSwitch.off()
