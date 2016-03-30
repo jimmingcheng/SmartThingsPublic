@@ -3,10 +3,11 @@
  *
  *  Copyright 2016 Jimming Cheng
  *
- *  Version 1.3.0
+ *  Version 1.4.0
  *
  *	Version History
  *
+ *  1.4.0   2016-02-19      Added Morning mode support
  *  1.3.0   2016-02-15      Added illuminance sensor for dark vs day mode 
  *  1.2.1   2016-02-12      Fixed bugs
  *  1.2.0   2016-02-12      Remove auto-off functionality
@@ -36,8 +37,12 @@ definition(
 
 preferences {
     page(name: "mainPage", install: true, uninstall: true) {
+        section("Presence") {
+            input "residents", "capability.presenceSensor", title: "Residents", required: false, multiple: true
+        }
         section("Contact Sensors") {
             input "frontDoorContact", "capability.contactSensor", title: "Front Door"
+            input "backDoorContact", "capability.contactSensor", title: "Back Door"
         }
         section("Lux Sensors") {
             input "luxSensor", "capability.illuminanceMeasurement", title: "Lux Sensor"
@@ -51,12 +56,17 @@ preferences {
             input "kitchenMotion", "capability.motionSensor", title: "Kitchen"
             input "livingRoomMotion", "capability.motionSensor", title: "Living Room"
             input "masterBathMotion", "capability.motionSensor", title: "Master Bath"
+            input "masterClosetMotion", "capability.motionSensor", title: "Master Closet"
             input "officeMotion", "capability.motionSensor", title: "Office"
             input "upstairsMotion", "capability.motionSensor", title: "Upstairs"
         }
         section("Switches") {
+            input "backPorchSwitch", "capability.switch", title: "Back Porch"
+            input "balconySwitch", "capability.switch", title: "Balcony"
+            input "bedroomHallSwitch", "capability.switch", title: "Bedroom Hall"
             input "bedroomSwitch", "capability.switch", title: "Bedroom"
             input "downstairsSwitch", "capability.switch", title: "Downstairs"
+            input "drivewaySwitch", "capability.switch", title: "Driveway"
             input "entryWaySwitch", "capability.switch", title: "Entry Way"
             input "frontDoorSwitch", "capability.switch", title: "Front Door"
             input "frontWalkSwitch", "capability.switch", title: "Front Walk"
@@ -84,7 +94,10 @@ def initialize() {
     state.lastActive = [:]
     state.sleepingDimLevel = 15
 
+    subscribe(residents, "presence.present", arrivalHandler)
+
     subscribe(frontDoorContact, "contact.open", frontDoorHandler)
+    subscribe(backDoorContact, "contact.open", backDoorHandler)
 
     subscribe(bedroomHallMotion, "motion.active", bedroomHallHandler)
     subscribe(downstairsMotion, "motion.active", downstairsHandler)
@@ -93,6 +106,7 @@ def initialize() {
     subscribe(kitchenMotion, "motion.active", kitchenHandler)
     subscribe(livingRoomMotion, "motion.active", livingRoomHandler)
     subscribe(masterBathMotion, "motion.active", masterBathHandler)
+    subscribe(masterClosetMotion, "motion.active", masterClosetHandler)
     subscribe(officeMotion, "motion.active", officeHandler)
     subscribe(upstairsMotion, "motion.active", upstairsHandler)
 
@@ -104,13 +118,25 @@ def initialize() {
     updateDarkness()
 }
 
+def arrivalHandler(evt) {
+    updateDarkness()
+    if (isDark()) {
+        sendOnCommand(balconySwitch, 30)
+        sendOnCommand(frontDoorSwitch)
+        sendOnCommand(frontWalkSwitch)
+        sendOnCommand(drivewaySwitch)
+    }
+}
+
 def frontDoorHandler(evt) {
     updateDarkness()
     motionActiveHandler(evt.device)
     if (isDark()) {
         if (wasActive(entryWayEastMotion) || wasActive(entryWayWestMotion)) {
+            sendOnCommand(balconySwitch, 30)
             sendOnCommand(frontDoorSwitch)
             sendOnCommand(frontWalkSwitch)
+            sendOnCommand(drivewaySwitch)
         }
         else {
             sendOnCommand(entryWaySwitch)
@@ -118,26 +144,36 @@ def frontDoorHandler(evt) {
     }
 }
 
-def bedroomHallHandler(evt) {
+def backDoorHandler(evt) {
     motionActiveHandler(evt.device)
     if (isDark()) {
-        if (location.mode == "Sleeping") {
-            //sendOnCommand(bedroomHallSwitch, 20)
-            //sendOnCommand(masterClosetSwitch, 20)
-            if (wasActive(entryWayEastMotion) || wasActive(masterBathMotion)) {
-                sendOffCommand(entryWaySwitch)
-                sendOffCommand(masterBathMirrorSwitch)
-            }
-            if (!wasActive(entryWayEastMotion) && !wasActive(masterBathMotion)) {
-                sendOnCommand(masterBathMirrorSwitch, state.sleepingDimLevel)
-            }
+        sendOnCommand(backPorchSwitch)
+    }
+}
+
+def bedroomHallHandler(evt) {
+    motionActiveHandler(evt.device)
+    if (location.mode == "Sleeping") {
+        if (wasActive(entryWayEastMotion) || wasActive(masterBathMotion)) {
+            sendOffCommand(entryWaySwitch)
+            sendOffCommand(masterBathMirrorSwitch)
+        }
+        if (!wasActive(entryWayEastMotion) && !wasActive(masterBathMotion)) {
+            sendOnCommand(masterBathMirrorSwitch, state.sleepingDimLevel)
+        }
+    }
+    else if (location.mode == "Morning") {
+        if (!wasActive(entryWayEastMotion) && !wasActive(masterBathMotion)) {
+            sendOnCommand(masterBathMirrorSwitch, 100)
         }
         else {
-            //sendOnCommand(bedroomHallSwitch, 100)
-            //sendOnCommand(masterClosetSwitch, 100)
-            if (wasActive(entryWayEastMotion) || wasActive(masterBathMotion)) {
-                sendOnCommand(bedroomSwitch)
-            }
+            sendOnCommand(bedroomHallSwitch)
+        }
+    }
+    else if (isDark()) {
+        sendOnCommand(bedroomHallSwitch)
+        if (wasActive(entryWayEastMotion) || wasActive(masterBathMotion)) {
+            sendOnCommand(bedroomSwitch)
         }
     }
 }
@@ -152,18 +188,20 @@ def entryWayEastHandler(evt) {
 
 def entryWayWestHandler(evt) {
     motionActiveHandler(evt.device, entryWaySwitch)
-    if (location.mode == "Sleeping") {
-        if (wasActive(downstairsMotion)) {
+    if (isDark()) {
+        if (location.mode == "Sleeping") {
+            if (wasActive(kitchenMotion)) {
+                sendOffCommand(kitchenSwitch)
+            }
+            if (wasActive(livingRoomMotion)) {
+                sendOffCommand(livingRoomSwitch)
+            }
+            if (wasActive(upstairsMotion)) {
+                sendOffCommand(upstairsSwitch)
+            }
+        }
+        if (wasActive(downstairsMotion) && backDoorContact.currentContact == "closed") {
             sendOffCommand(downstairsSwitch)
-        }
-        if (wasActive(kitchenMotion)) {
-            sendOffCommand(kitchenSwitch)
-        }
-        if (wasActive(livingRoomMotion)) {
-            sendOffCommand(livingRoomSwitch)
-        }
-        if (wasActive(upstairsMotion)) {
-            sendOffCommand(upstairsSwitch)
         }
     }
 }
@@ -175,9 +213,9 @@ def kitchenHandler(evt) {
 def livingRoomHandler(evt) {
     motionActiveHandler(evt.device)
     if (isDark()) {
-        if (location.mode == "Sleeping") {
-            sendOnCommand(livingRoomSwitch)
-        }
+        //if (location.mode == "Sleeping") {
+        //    sendOnCommand(livingRoomSwitch)
+        //}
         if (wasActive(upstairsMotion)) {
             sendOffCommand(upstairsSwitch)
         }
@@ -192,6 +230,11 @@ def masterBathHandler(evt) {
     else {
         sendOnCommand(masterBathMirrorSwitch, 100)
     }
+}
+
+def masterClosetHandler(evt) {
+    motionActiveHandler(evt.device)
+    sendOnCommand(masterClosetSwitch)
 }
 
 def officeHandler(evt) {
@@ -238,7 +281,7 @@ def traversedMotion(motionSensors) {
 }
 
 def sendOnCommand(lightSwitch, level=null) {
-    if (level == null) {
+    if (level == null || lightSwitch.currentLevel == level) {
         if (lightSwitch.currentSwitch != "on") {
             lightSwitch.on()
         }
@@ -285,13 +328,13 @@ def updateDarkness() {
 def becameDark() {
     if (state.isDark != true) {
         state.isDark = true
-        sendNotificationEvent("Aurora is in dark mode")
+        sendNotificationEvent("It's getting dark. I'll set the lights to automatic.")
     }
 }
 
 def becameBright() {
     if (state.isDark != false) {
         state.isDark = false
-        sendNotificationEvent("Aurora is in day mode")
+        sendNotificationEvent("Sun's out. I'll set the lights to manual.")
     }
 }
